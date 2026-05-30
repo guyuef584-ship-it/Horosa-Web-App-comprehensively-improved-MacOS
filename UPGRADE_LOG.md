@@ -14,13 +14,13 @@ Append new entries; do not rewrite history.
 
 ## 2026-05-29
 
-### v2.4.0（重发补丁,版本号不变）：热修「更新后卡启动页 / 不进主界面 /「进入主界面」按钮点不动」(模态弹框阻塞导航)
+### v2.4.0（重发补丁,版本号不变）：热修「更新后卡启动页 / 不进主界面 /「进入主界面」按钮点不动」(真因 cleanup_state 误杀静态服务器)
 
-> 发布后真机发现 2.4.0 的弹框阻塞 bug,**版本号保持 2.4.0、覆盖重发原 GitHub release**(非 2.4.1)。
+> 发布后真机发现 2.4.0 此 bug,**版本号保持 2.4.0、覆盖重发原 GitHub release**(非 2.4.1)。**前两次误诊(快路径、模态弹框)都没修好,靠真机实测才定位真因。**
 
-- Scope: 真机发现 2.4.0 更新后卡在「正在进入主界面」、不导航、按钮死。真因:首启成功后 `emit_ready`(注入 `window.location.replace` 导航 JS)紧跟 `show_post_update_notice_if_needed` 的**阻塞式 `MessageDialog`**,macOS 上 NSAlert 在主线程抢嵌套 run loop、赶在导航 JS 前冻结 webview。**v2.4.0 快路径修复让首启时序变紧→这条 race 从偶发变必现**(原 v2.3.2 只修「慢」未碰「卡」)。修法:移除首启关键路径上的模态框,只留非阻塞 macOS 通知。**铁律:首启 emit_ready 后、导航完成前不做任何模态阻塞。**
-- Files: `Horosa_Desktop_Installer/src-tauri/src/main.rs`(`show_post_update_notice_if_needed`)。**版本号不变 2.4.0 / 2.4.0-runtime1**。文档 `docs/更新后卡启动页-模态弹窗阻塞导航修复-v2.4.0.md` + `config/release_notes/2.4.0.md`(补弹框修复条)+ `windows-sync-handoff.md`。**纯 Tauri 外壳,不涉 jar / 前端 / Python(无需重编)。**
-- Verification: `cargo fmt` + `cargo check` 绿;`MessageDialog` import 仍被错误框等其它路径用、无 unused 警告。需 mac 真机:覆盖重发 2.4.0→已装 2.4.0 用户经软件内更新(或重装)→更新后应直接自动进主界面。
+- Scope: 更新后卡在「正在进入主界面」、不导航、按钮死;普通重启正常。**真因:`runtime_bootstrap` 的 `first_launch_after_update` 分支里调 `cleanup_state(&app)`,它 `web_shutdown.take()+store(true)`,把本次上方刚 `start_static_server` 起的静态服务器(web_port)关掉 → `emit_ready` 导航的 `frontend_url`(http://127.0.0.1:web_port/index.html)立刻连不上 → 永远停启动页**(实测 curl web_port=000、进程零监听端口);按钮调同一个 `window.location.replace` 也连不上→看着像「按钮没用」。`cleanup_state` 在此对 session 是 no-op,唯一效果就是误杀静态服务器;普通启动不走此分支故正常(这也是「退出重开就好」+「每次更新复发」的原因)。修法:删掉首启分支里的 `cleanup_state` 调用(函数本身仍被退出/错误等路径合法用)。另把 `show_post_update_notice` 的阻塞式 `MessageDialog` 一并去掉(只留非阻塞通知,防御性加固,非真因)。**铁律:首启 `start_static_server` 之后绝不调会触发 `web_shutdown` 的清理。**
+- Files: `Horosa_Desktop_Installer/src-tauri/src/main.rs`(`runtime_bootstrap` 删 cleanup_state 调用 + `show_post_update_notice_if_needed`)。**版本号不变 2.4.0 / 2.4.0-runtime1**。文档 `docs/更新后卡启动页-真因cleanup_state误杀静态服务器-v2.4.0.md` + `config/release_notes/2.4.0.md` + `windows-sync-handoff.md`。**纯 Tauri 外壳,不涉 jar / 前端 / Python(无需重编)。**
+- Verification: **真机二进制级实测:重编 binary(含修复)→ /tmp .app 副本换 binary + ad-hoc 签名 + 写假更新标记 → 启动 → `curl 127.0.0.1:38991/index.html`=HTTP 200(静态服务器活,修复前 000)+ 截图已进入主界面(完整本命星盘),不再是启动页。** ✅ 端到端确认。`cargo fmt`+`cargo check` 绿。
 
 ### v2.4.0：西占技法批量补全(6 技法全链路 AI) + 更新后自启修复 + orbs 随命盘存档
 
