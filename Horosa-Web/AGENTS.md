@@ -201,3 +201,44 @@ v2.2.1 给 #8 加的 keep-alive 心跳线程(每 15s `emitter.send(keep-alive)`,
 - **更新标记必须「读取即消费」。** `update-complete.txt` 若只在启动**成功**时删,首启一失败就残留 → 下次仍走 300s 慢路径,反复卡。现 `main.rs` 一进 `runtime_bootstrap` 就 `consume_update_complete_marker_into_state`(缓存通知到 `AppState` 后立即删标记),成功后从内存弹「更新完成」窗。
 - **更新后「首启」别再走「全量慢校验」——它是冗余的(v2.3.2 修)。** `apply_update` 装前已 `verify_sha256(runtime_sha256)`,装进去的 runtime 是逐字节验签过的;但 `runtime_bootstrap` 旧逻辑 `fast_path_enabled = !first_launch_after_update && …` **强制**首启全量,而让后续变快的 fast-path 标记**只在「整轮成功」后才写** → 冷首启 ~22s 像卡死被强退 → 标记没写 → 下次又全量 → **反复重启两三次才打开**(真机一次更新三启 trusted=0/0/1)。修法:对已验签 runtime 在 `start_runtime` **之前**就 `write_runtime_fast_path_marker` 预写标记 + 取消 `fast_path_enabled` 对首启的强制关闭 → 首启即快路径、强退也不回退全量。详见 [`../docs/更新后自启修复-v2.3.2.md`](../docs/更新后自启修复-v2.3.2.md)。**别把首启退回成无条件全量校验。** 注:`update-installer.log` 的 `[open] relaunch confirmed` 证明 helper 自动重开本身没坏,卡的一直是首启那段。
 - 以上各点有 `release_preflight.sh` **[9] 哨兵(C①/A/C②/B/D)**兜底,别绕过。
+
+---
+
+## 金口诀解读层（jinkou 判语 / 四位生克 / 应期 / 神煞，本轮新增）
+
+新增「解读层」：`components/jinkou/JinKouDoc.js`（判语库）+ `JinKouCalc.js`（`buildJinKouData` 解读层字段 + `normalizeKinjinkouData` 重算）+ `JinKouMain.js`（分析/辅助 Tab）+ `JinKouRelationMini.js`（刑冲合害破 SVG）+ `liureng/LRConst.js`（`ZiHai/ZiPo/TaiXuanNum/WuXingNum`）。**踩过的坑，勿重蹈：**
+
+1. **`buildRow()` 不返回 `branch`**（只用 `option.branch` 算空亡）。任何「按行的地支」派生逻辑（地支关系/太玄数）必须用 `rowZhi(r)=r.branch||(ZiList 含 content?content:'')` 从 `content` 兜底，否则取不到支、永远空。
+2. **本地 `buildJinKouData` 行 ≠ 后端 `kinjinkou` 行**（月将算法差一位 → 将神/贵神可能不同），而画面/三盘用后端行。**解读层必须在 `normalizeKinjinkouData` 用「显示行(后端 rows)」重算**（relations / branchRelations / taixuan / yongStrength / yingQi），**不能直接用本地 fallback**，否则判语跟画面对不上（no-串盘 invariant）。`buildJinKouData` 已 return `dayZi/yearZi` 供重算。
+3. **`JINKOU_SHENSHA_DOC` 的键必须覆盖 `JinKouShenShaOrder` 全部起例名**，否则该神煞显示空判语 + 默认中性色（`天德合` 踩过）。已加 jest 守护（`JinKouCalc.test.js`「所有起例神煞都有判语」）——加新起例神煞时**同步加判语**。
+4. **`LRConst` 本就有 `ZiXing`（刑，单向 `{支:支}`）和 `ZiCong`（六冲）**——别重声明（babel 会「重复声明」直接报错，jinkou 首次落地踩过）；`ZiHai/ZiPo` 才是本轮新增。刑是单向映射，判关系要**双向**查 `map[a]===b||map[b]===a`。
+5. **jest 过 ≠ 能编译**：批量 Edit 误留 orphan 方法签名时 **jest 通过、`npm run build` 才报 `Missing semicolon`**。改完 jinkou（尤其大段 JSX）**必跑 `npm run build`** 再认定通过。
+6. **全链路同步（缺一处就漏）**：解读层进 `buildJinKouSnapshotText` →`saveModuleAISnapshot('jinkou')`（**AI 分析挂载 + 命盘/事盘储存共用同一快照**）；导出再进 `utils/aiExport.js` `AI_EXPORT_PRESET_SECTIONS.jinkou`（**AI 导出 / 导出设置**，节名须与快照 `[段头]` 一致）。新增快照段必须**两处都加**，否则导出选不到。
+7. **UI**：右栏 4 Tab（概览 / 神煞 / 分析 / 辅助）；概览合并「课情/四位/三盘/四位类象」；神煞子 Tab「支煞/年煞/长生/四煞」。神煞吉凶用 `jxColor(jx)`→语义色变量（`ji/xiong/zhong`），**勿写死 hex**。**判语来源不得留任何第三方 App 痕迹**（公版古籍 + 复用 `LRShenJiangDoc.js`，重编）。
+8. **不臆造**：五动/三动规则、除「经营求财」外 12 类取用神、六壬合占 14 类——按门派分歧，字段/结构预留、留 `// TODO（待底本/实测）`，**别瞎填**。
+
+---
+
+## 七政四余 · Moira 模式（`components/guolao/`，对齐 Moira app）
+
+**渲染时序、状态归属、命盘轮还原，踩过的坑勿重蹈：**
+
+1. **一次性渲染（禁止分步跳出）**：起盘/重算必须经 `GuoLaoChartMain.requestGuolaoBundle`——本命盘 + 流年盘 `Promise.all` 并行取齐、Moira 规则取回后**单次 `setState` 全量提交**（唯一 `this.bundleSeq` 守竞态）。期间只显示骨架(`renderGuolaoChartSkeleton` / 面板 `horosa-guolao-moira-skeleton-row`)或保留旧盘，**绝不画半成品**。旧的多段链路 `applyChartObj→requestMoiraTransitChart→requestMoiraRules→commitMoiraPanel` 已废弃成死方法，**勿复活、勿再加中途 setState**。中栏 wheel 与右栏 panel 必须读**同一**已提交 `chartObj`（`moiraPanelChartObj===chartObj`）；`GuoLaoMoiraPanel` 在 `loading` 时**不得**预渲染 `buildPanelFallbackValue` 空壳（否则规则到达时二次跳变）。
+2. **显示偏好 = 组件 state + localStorage（`GuoLaoChartStyle.getStoredGuolaoDisplay`），不进 fields**：相位多选/庙旺标注/本命神煞圈/限度年龄环切换 → **即时重绘 wheel、不触发后端重取**（props 传 `aspectSet/showDignity/showBirthGods/showAgeRing`）。只有**影响排盘的**选项（宿度制/命度/罗计/身度/昼夜/大限算法）才进 `fields` → 触发 bundle 重算。别把显示开关塞进 fields，否则每次切换都白跑一次 `/chart`+`/qizheng/moira`。
+3. **本命神煞圈半径固定** `birthOuter = r(9)-8`（常量），**不可**随 `showMoiraTransitGods` 在 `r(9)-8`/`r(10)-12` 间变——否则取消流年神煞圈后本命圈外扩变形。
+4. **紫炁在 Moira 链路本就正确**：喂 Moira 的 chartObj 由 astropy `perchart` 产出，紫炁(PURPLE_CLOUDS)是约 28 年匀速虚星（实测今日 168.3°，与 Moira 公式 `230.5+(JD−JD(1975-03-13 16:00 UT))/10227.1792×360` ≈168.8° 吻合，与月孛 258° 分明）。`紫氣=swe.OSCU_APOG` 的 bug **只在 kinastro**（`vendor/kinastro/.../qizheng/constants.py`，本轮不碰、也不喂 Moira）。**勿对 Moira 紫炁再加覆盖**（画蛇添足）。
+5. **逐神煞悬浮判语**：`GuoLaoShenShaDoc.GUOLAO_SHENSHA_DOC`（公版古籍口径、自有重编、零第三方 App 痕迹）键名 = wheel 的 `BIRTH_GOD_ORDER`∪`TRANSIT_GOD_ORDER`。`renderGodRing` 给每个神煞单独热区 + `guolaoShenShaTip()` 判语（保留宫级 summary 作底层）。jest `__tests__/GuoLaoShenShaDoc.test.js` 守全覆盖——往 wheel god order 加神煞 → **同步加判语**否则测试红。
+6. **`GuoLaoMoiraPickWheel`(天星择日动盘) 与命盘轮共用** wheel 的导出 helper（`moira*`）+ 同一 `GUOLAO_SHENSHA_DOC`；其 24 山环(`renderMountainRings`)是择日方位概念——**24 山只放 PickWheel、勿叠到本命黄道盘**（azimuth≠黄经，叠上去不还原）。
+7. **24 山/择日自动搜时（太阳到山·日月蚀·评分排名）尚未实现**：PickWheel 现为「动盘 + 24 山 + 神煞」手动择时盘，自动搜时引擎是 TODO（需后端 + 对 Moira PICK 校验，勿仓促上线致不稳）。
+8. **右栏多 Tab**：`GuoLaoMoiraPanel` 内用 antd `Tabs items=[概览/星曜/宫限/神煞/格局]`，className **必须** `horosa-content-tabs horosa-guolao-tabs`（沿用原「Moira」单 tab 的样式，否则风格不一致）；`GuoLaoChartMain` 右栏**不再**包单 pane `<Tabs><TabPane tab="Moira">`（会变双层 tab）。卡片内距已收紧（section `7px 9px`、卡片 `5px 7px`、行 `min-height 22`），勿回退成 10px/8px 大留白。
+   - **坑：卡片被撑满高（巨大留白）的真因**＝`app.less:5266` 的 `.horosa-workspace-shell .horosa-content-tabs .ant-tabs-tabpane > * { height:100% !important }`（为「单满高面板」设计，撑高所有 tabpane 直接子元素）。本面板每 tab 是多张卡 → 全被撑满。**必须用更高特异度覆盖**：`.horosa-workspace-shell .horosa-guolao-moira-tabs.ant-tabs .ant-tabs-tabpane > * { height:auto!important; max-height:none!important }`（`.x.ant-tabs` 凑 0,4,0 > app.less 0,3,0），并给 `.ant-tabs-tabpane` 加 `overflow-y:auto`（pane 满高自滚）。同特异度 + 同 `!important` 会输给加载顺序，务必抬特异度。
+   - **坑：神煞卡字挤**＝曜名长串 + 全局 `line-height:18` 偏紧 → `.horosa-guolao-moira-gods .horosa-guolao-moira-god` 单独放宽 `line-height:20` + 宫名/支/曜 间 `margin`。
+9. **中盘四柱（`renderSideText`）读 `bazi.year.stem.cell + bazi.year.branch.cell`**（结构非 `.text`！），与右栏 `baziText` 同源；`root.nongli` 常 undefined → 用 `chart.nongli.bazi`。原只读 `.text` → 月/日/时柱空、只剩年柱（踩过）。
+10. **PickWheel 28 宿环＝逐像素照抄 Moira 命盘轮**（用户原话：「一个圆环里层外层都有刻度、刻度都贴在圆环上、中间红线不挨任一圆、刻度底端贴着两个圆」）。结构＝**两个边界圆 `r(4)`/`r(6)`（`PICK_RING_DRAW_TYPE` 均=1、已画）框住宿区**，内部用**计算半径**按 **20%/60%/20%** 切三带（`band=r(6)-r(4)`、`rA=r(4)+band*0.2`、`rB=r(6)-band*0.2`）：
+    - `renderStellarTicks`：内带 `renderDegreeMarkBand(r(4), rA, {anchor:'inner'})` 底端贴 `r(4)` 向外伸 ＋ 外带 `renderDegreeMarkBand(rB, r(6))`（默认 anchor=outer）底端贴 `r(6)` 向内伸 → **里外各一条刻度带、各贴一个边界圆**（720 条＝360+360）。
+    - `renderStellarRing`：宿名 `verticalText` 居中于 `(r(4)+r(6))/2`；红色宿界线 `radialLine(edgeTheta, rA+1, rB-1)` **只在中间空带、不挨 r(4)/r(6)**（对齐 Moira 的 `r(5)+1~r(6)-1` 做法）。
+    - 几何自检（preview eval 实测）：R=560 → r(4)=285.6 / r(6)=336；宿名半径 310.8（正中）、刻度 285.6↔336（底端贴两圆）、红线 296.7↔324.9（距两圆各≈11px 浮空）。
+    - **勿**回退成单刻度带（历史 bug：刻度只一圈 / 游离到 r(7)-r(8) / 与宿名重叠在 r(4)-r(5) → 「只有一圈、奇怪」，用户为此反复退回）。注意 PickWheel 版 `renderDegreeMarkBand` 签名是 `(inner, outer, keyPrefix, opt)`（**无** thetaForDegree 参，内部固定 `pickThetaFromDegree`；命盘轮版多一个 thetaForDegree 参，勿混用）。
+11. **格局显示档位**：左栏「显示」分区底部按钮 + 底部快捷功能 dock **双入口**，均 `openMoiraQuickDialog('patterns')`（同一 styleLevel 模态）。
+12. **时间组件全链路**：本命 `fields.date/time/zone → genParams → /chart + /qizheng/moira + saveGuolaoAISnapshot`；流年 `Moira流年时间 → paramsWithMoiraTransit → transitParams`。右栏「起盘与流年/真太阳与出没」+ 中盘 `renderSideText`（四柱/流年/时间）均取自此，改时间组件后这几处要一并核。
+13. **AI 快照 4 段 + 大限同步**：`buildGuolaoSnapshotTextV2` 输出 `[起盘信息]/[七政四余宫位与二十八宿星曜]/[神煞]/[大限]` 四段。`[大限]` 由 `buildGuolaoLimitSection` 复用 wheel 导出的 `moiraLifeDegree(chart,fields)` + `moiraBuildLimitTable(life, birthYear)`，与盘面「命身与限度·大限」**同口径**（出生年取 `params.date` 前 4 位）。**新增/改快照段必同步 4 处**：① 快照 builder ② `aiExport.js` 段表 `guolao:[...]`（**line 359**，否则「AI导出设置」不识别该段、不可勾选）③ 挂载＝`aiAnalysisContext`→`buildGuolaoSnapshotForFields`→**同一 V2**（自动含新段、无需单独改）④ 命盘事盘储存只存 `fields`、快照/大限**读取时重算**（派生字段、不入 schema）。**勿**只改 builder 漏掉 ② → 导出设置与实际快照段不一致。
