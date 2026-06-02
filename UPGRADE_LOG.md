@@ -12,6 +12,19 @@ Append new entries; do not rewrite history.
 
 ---
 
+## 2026-06-02 — v2.5.3 / runtime1(替代 v2.5.2,与 Windows 端版本号统一)
+
+- Scope: bump 2.5.2 → 2.5.3 / runtime1;UranianDialMain 布局收尾(中间栏底部 Dock 安全 + 左右栏小窗口独立下滑);release_notes/2.5.3.md;windows-sync-handoff 加 v2.5.3 条目。
+- Files: `Horosa_Desktop_Installer/{src-tauri/{Cargo.toml,Cargo.lock,tauri.conf.json},config/release_config.json,config/release_notes/2.5.3.md,package.json,scripts/verify_launcher_console_states.py,web/app.js}` · `Horosa-Web/astrostudyui/src/components/germany/UranianDialMain.js` · `README.md` · `README_EN.md` · `README_ZH.md` · `CITATION.cff` · `docs/windows-sync-handoff.md`
+- Details:
+  - 90°中点盘中间栏 size=Math.max(420, Math.min(height-2, vh-260, 960)),三方钳位防底部 Dock 遮挡。
+  - 中栏盘容器加 `paddingBottom:24` 余量。
+  - 左/右 Col 内层 `<div>` 包 `width:100% + maxHeight=Math.max(380, vh-220) + overflowY:auto`;小窗口独立下滑。
+  - state.vh 跟踪 window resize 实时重算。
+- Verification: jest 184 绿;preview 双 viewport 验证(vh=1220 盘 960、底 gap=119;vh=700 盘 440、左栏 scrollH=766>maxH=480 触发滚动);preflight 全绿(HOROSA_KNOWN_UNMERGED=1 跳过延后分支)。
+
+---
+
 ## 2026-06-01
 
 ### v2.5.1 re-issue（#14 本地回环不走系统代理；runtime bump `2.5.1-runtime1`→`2.5.1-runtime2`，覆盖重发 v2.5.1）
