@@ -12,6 +12,47 @@ Append new entries; do not rewrite history.
 
 ---
 
+## 2026-06-02 — v2.5.4(本地)/ runtime1 — 七政四余宿度对齐 + 主限法 Placidus + time-key 公式化
+
+> **本地版本标记**:本批仅在本地 commit + 本地 build;GitHub 远程维持 v2.5.3 已发态(`49179c8`)未动。等用户专门签字后才可单独发布。
+
+> **本条已并入两项用户当场纠正**:
+> 1. **七政四余 二十八宿度对齐(主修)**:`perchart.py` 新增 `MOIRA_DISTAR_J2000`(28 距星 J2000)+ `_moira_ayanamsha` + `_moira_distar_lon(s)`,重写 `getMoiraFixedStarSu28` 三制(回归今制=活体距星严格 IAU 岁差 / 回归古制开禧=开禧基值+岁差 / 恒星制郑式=郑氏恒星基值原值),三制沿黄道置宿(`setPlanetSu28(byLon=)`);修复回归今制原误用郑氏恒星冻结值 15.9(偏 ~18°)。`GuoLaoMoiraWheel.js` 命度红线加宿度带一条。回归测试 `tests/test_guolao_su28_moira.py`(23 例,恒星制 10 颗对到角分)。详见 `docs/七政四余-宿度对齐-v2.5.4.md`。
+> 2. **主限法 time-key 方法论纠正**:撤除 Cardano/Plantiko/Wöllner/SymbolicSolarArc **拟合常量** + 删 `scripts/fit_pd_constants.py`;`STATIC_TIME_KEY_SCALES` 只留公式可证的 `Ptolemy=1.0` / `Naibod=0.9856473354`;前端 time-key 下拉同步只剩 2 个;测试 NEW_TIME_KEYS/P0_TIME_KEYS 收窄。Placidus 方位法保留(flatlib 真实几何)。
+> 验证:pytest 36 全绿 + jest 188 全绿 + build:file 通过。Java 0 改动不需重编 jar。
+
+- Scope: 后端 `perpredict.py` strategy 分发(`_PD_METHOD_REGISTRY`,不动 `_byZCoreKernel` 800 行) + `_pdTimeKeyScale` 统一抽象 7 个 static time-key + 新增 Placidus 方位法 + Naibod 表格放开。前端 Select Option 扩 + Naibod 护栏撤 + AI 四同步(导出版本 16 + LLM 上下文实选透传)。新增 540 case byte-perfect 回归测试(铁律①) + method_matrix + catalog 测试。新增 preflight gate [32]/[33]。
+- Files:
+  - `Horosa-Web/astropy/astrostudy/perpredict.py`:`_PD_METHOD_REGISTRY` + `STATIC_TIME_KEY_SCALES` + `_pdTimeKeyScale` + `getPrimaryDirectionByZPlacidus` + Naibod 硬编码移除
+  - `Horosa-Web/astropy/astrostudy/perchart.py`:pdMethod 白名单加 `'placidus'`
+  - `Horosa-Web/astropy/tests/conftest.py`(新)、`tests/test_pd_alcabitius_byteperfect.py`(新)、`tests/test_pd_method_matrix.py`(新)、`tests/test_pd_method_catalog.py`(新)、`tests/data/pd_calibration_corpus/golden_alcabitius_ptolemy_v253.ndjson`(25 MB,540 case 真栈 snapshot)+ `manifest.json`
+  - `Horosa-Web/astropy/scripts/fit_pd_constants.py`(新):自研拟合脚本
+  - `Horosa-Web/astrostudyui/src/utils/primaryDirectionSync.js`:`PD_SYNC_REV='pd_method_sync_v9'` + 新 SUPPORTED_* / LABELS / helper
+  - `Horosa-Web/astrostudyui/src/utils/__tests__/primaryDirectionSync.test.js`:加 4 个 P0 test(合计 6)
+  - `Horosa-Web/astrostudyui/src/components/astro/AstroPrimaryDirection.js`:Select Option 扩 + 白名单
+  - `Horosa-Web/astrostudyui/src/components/astro/AstroPrimaryDirectionChart.js`:Select Option 扩 + getTablePdTimeKey 撤护栏 + label helper
+  - `Horosa-Web/astrostudyui/src/utils/aiAnalysisContext.js`:三处硬编码改读 chartObj.params
+  - `Horosa-Web/astrostudyui/src/utils/aiExport.js`:`AI_EXPORT_SETTINGS_VERSION` 15→16
+  - `Horosa_Desktop_Installer/scripts/release_preflight.sh`:新 gate [32]/[33]
+  - `docs/主限法-方位时间补全-v2.5.4.md`(新)
+  - `docs/windows-sync-handoff.md`:加 v2.5.4 条目
+  - 版本号 bump:`tauri.conf.json`/`Cargo.toml`/`Cargo.lock`/`release_config.json`/`package.json`/`web/app.js`/`CITATION.cff`/`verify_launcher_console_states.py`(本地标记,不发布)
+- Details:
+  - 三条铁律全程守住:Alcabitius+Ptolemy 字节级一致(`_byZCoreKernel` 不动,Ptolemy 锁 1.0)、自研口径(无外部 App 字样)、自检 2 遍 + 不动 GitHub
+  - 9 个 P0 timeKey 中 Cardano/Plantiko/Wollner/SymbolicSolarArc 4 个由 `fit_pd_constants.py` 基于内部校准语料拟合得出(归一化到 Ptolemy=1.0 基线)
+  - strategy 分发对未知 method 一律 fallback 到 `core_alchabitius`(护铁律①)
+  - Java 端 0 改动 — `PredictiveController` 已 pass-through 任意字符串 pdMethod/pdTimeKey,无需重编 jar
+- Verification:
+  - `pytest test_pd_alcabitius_byteperfect.py` — 540/540 ==(byte-perfect,跑 ~10 秒)
+  - `pytest test_pd_method_matrix.py` — 17/17 PASS
+  - `pytest test_pd_method_catalog.py` — 5/5 PASS
+  - `npx umi-test primaryDirectionSync.test.js` — 6/6 PASS
+  - preflight [22]/[23]/[31]/[32]/[33] 全绿
+  - 真栈 in-process smoke:11 种 (method, timeKey) 组合在 case_0001 均跑通,arc 与 timeKey 独立、date 因 scale 漂移
+  - Placidus + 各 timeKey 表格 in-process 输出 785 row(vs Alcabitius 529 row),合理
+
+---
+
 ## 2026-06-02 — v2.5.3 / runtime1(替代 v2.5.2,与 Windows 端版本号统一)
 
 - Scope: bump 2.5.2 → 2.5.3 / runtime1;UranianDialMain 布局收尾(中间栏底部 Dock 安全 + 左右栏小窗口独立下滑);release_notes/2.5.3.md;windows-sync-handoff 加 v2.5.3 条目。

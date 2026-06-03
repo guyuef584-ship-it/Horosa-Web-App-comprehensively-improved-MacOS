@@ -10,6 +10,74 @@
 
 ---
 
+## 🔒 主限法方位+时间补全(P0 v2.5.4 起,P1~P3 在途)
+
+> 完整路线图见 `~/.claude/plans/temporal-discovering-russell.md`;P0 实现详解见
+> [`docs/主限法-方位时间补全-v2.5.4.md`](../docs/主限法-方位时间补全-v2.5.4.md)。
+> **三条铁律(P0~P3 全程):** ① Alcabitius+Ptolemy 字节级一致 ② 公开产物 100% 自研口径 ③ 自检 2 遍 + 全程不动 GitHub。
+
+### P0 已上 (v2.5.4 本地)
+- **方位法 (`pdMethod`)**:`core_alchabitius`(默认,不动) / `horosa_legacy`(不动) / **`placidus`(新)**
+- **时间换算 (`pdTimeKey`)**:`Ptolemy`(=1.0) / `Naibod`(=0.9856473354) / `Cardano` / `Plantiko` / `Wollner` / `SymbolicDegree`(=1.0) / `SymbolicSolarArc` — 共 7 个 static
+- **方向类别 (`pdtype`)**:仅 In Zodiaco(0,默认),In Mundo 留 P2
+
+### 改动会反复踩的 8 个坑
+1. **`_byZCoreKernel` 是 v2.5.3 byte-perfect 默认路径** — 800 行 + 4 ML 修正模型(`CORE_PD_ASC_CASE_CORR_MODEL`/4 个 virtual body)。**任何改动这条都会破坏 540 case 字节级一致**。strategy 分发改造时必须保留原函数指针,只是注册到 `_PD_METHOD_REGISTRY` map。preflight `[32]` 守此点。
+2. **`STATIC_TIME_KEY_SCALES['Ptolemy']` 必须严格 == 1.0**(整型字面量,非浮点近似)。`appendDateStr` 中 `arc / 1.0` 才能字节级 `== arc`。写成 `0.99999...` 或公式都会触发 byte-perfect fail。preflight `[32]` 用正则守。
+3. **strategy 分发未知 method 必 fallback 到 `core_alchabitius`** — `getPrimaryDirectionByZ()` 中 `handler_name = _PD_METHOD_REGISTRY.get(method) or _PD_METHOD_REGISTRY['core_alchabitius']`。一旦 fallback 链断,未知 pdMethod 会 crash 或走错路径,可能动到默认 byte-perfect 表格。
+4. **`perchart.py` 白名单与 `_PD_METHOD_REGISTRY` 必须同步**(`perchart.py:281-285`)。否则白名单收紧、用户实选被回退,UI 显示 Placidus 但实际跑 Alcabitius —— 用户验收必骂。新加方位法时两处同改。
+5. **`PD_SYNC_REV` 升版必须做** — 改任何主限法相关默认 / option / 算法时,都要把 `primaryDirectionSync.js:3` 的 `PD_SYNC_REV` 字符串 bump 一档。旧 chart 持久化里有 `pdSyncRev !== PD_SYNC_REV` 时,`needsPdRecompute` 才会触发回收重算。忘 bump → 旧用户看到的还是旧 method/timeKey 结果。
+6. **`aiAnalysisContext.js` 主限法 case 不能硬编码覆盖** — `:1000-1010` 的 snapshotChartObj.params 只能扩 `showPdBounds`,**不能覆盖 pdMethod/pdTimeKey**。否则用户选 Placidus + Naibod,LLM 看到的永远是 Alchabitius + Ptolemy,与界面不符。preflight `[33]` 用 grep 守。
+7. **`AstroPrimaryDirectionChart.getTablePdTimeKey` 不再降级 Naibod**(P0 起)。v2.5.2/v2.5.3 时这里把 Naibod 强制改回 Ptolemy 防表格污染;P0 起 `_pdTimeKeyScale` 统一抽象 + byte-perfect 测试守卫后,Naibod 直接放到表格。preflight `[33]` 用 grep 守不能再出现 `key === 'Naibod' ? DEFAULT_PD_TIME_KEY` 这种降级模式。
+8. **新加 time-key 时 4 处同步**:(1) `perpredict.STATIC_TIME_KEY_SCALES` 加值,(2) `primaryDirectionSync.SUPPORTED_PD_TIME_KEYS` + `PD_TIME_KEY_LABELS` 加,(3) `AstroPrimaryDirection.normalizePdTimeKey` + Option 数组扩,(4) `AstroPrimaryDirectionChart.normalizePdTimeKey` + Option 数组扩。少一处都会让 UI 选了但后端不识别(白名单 fallback 默认,与显示不符)。
+
+### 自检最低门槛(改任何主限法相关代码后)
+```bash
+# 1. 540 case byte-perfect(铁律①,任何 != 立即 fail)
+cd Horosa-Web/astropy && python -m pytest tests/test_pd_alcabitius_byteperfect.py -v
+# 2. method matrix + catalog
+python -m pytest tests/test_pd_method_matrix.py tests/test_pd_method_catalog.py -v
+# 3. 前端
+cd ../astrostudyui && npx umi-test src/utils/__tests__/primaryDirectionSync.test.js
+# 4. preflight [32]/[33]
+cd ../../Horosa_Desktop_Installer && bash scripts/release_preflight.sh
+```
+
+### time-key 方法论铁律(2026-06-02 用户纠正)
+**主限法 time-key 不准"对数据拟合一个常数当主算法"。必须先有明确天文/几何公式定义,数据只用于验证。**
+- 当前 `STATIC_TIME_KEY_SCALES` 只放**公式可证**的 key:`Ptolemy=1.0`(1°RA/年,古典定义)、`Naibod=0.9856473354`(0°59'08" 太阳平均周日运动,Naibod 1560s)。
+- 曾短暂加过 Cardano/Plantiko/Wöllner/SymbolicSolarArc 的**拟合常数**(从单盘 probe 反推)——**已撤除**,因违反此铁律(单盘拟合无法区分 static/dynamic、只对那张盘成立)。`scripts/fit_pd_constants.py` 也已删。
+- 后续要加的 key 都有公式:Brahe=出生日太阳真实日运动(dynamic)、Placidus=逐日太阳运动(dynamic)、Ptolemy-Naibod 中点=0°59'34"。按公式实现 + 用 `runtime/pd_auto` 540 case 做**验证**(残差检验),不是拟合。
+- PD 时间换算公式定义参考:`docs/西占…` 或 Dykes/Primer 原著(`Naibod=0°59'08" RA/年`,`Ptolemy=1°RA/年`)。
+
+---
+
+## 🔒 七政四余 二十八宿度·自有恒星案三制(2026-06-02 修)
+
+> 详见 [`docs/七政四余-宿度对齐-v2.5.4.md`](../docs/七政四余-宿度对齐-v2.5.4.md)。后端在 `astropy/astrostudy/perchart.py`。
+
+**`doubingSu28` 五种宿度制**(`perchart.py` 常量 + `getFixedStarSu28` 分发):
+- `0` 荀爽19年测量(REAL): 赤道距星活体,**沿赤经(RA)置宿**(`getAdjustFixedStarSu28`)。不动。
+- `1` 斗柄定房法(DOUBING): `getFixedStarSu28ByDouBing`。不动。
+- `2` 回归今制(MOIRA_CURRENT): **28 距星活体 tropical 黄经(严格 IAU 岁差),沿黄道置宿**。
+- `3` 回归开禧·开禧历(MOIRA_KAIXI,UI 标签 2026-06-02 由「回归古制(开禧)」改为「回归开禧(开禧历)」): **开禧基值(`MOIRA_KAIXI_STELLAR_DEGREES` 16.0…)+ ayanamsha(1300/4.0)**。对应参考软件的「显示开禧宿度」独立项。
+- `4` 恒星制郑式(ZHENG_SIDEREAL): **郑氏恒星基值(`MOIRA_CURRENT_STELLAR_DEGREES` 15.9…)原值**(盘 isZhengSidereal→sidereal,planets 亦 sidereal),沿黄道置宿。
+
+**易混淆点(2026-06-02 用户问到)**:参考软件菜单里「**古制**」≠「**开禧**」是两个东西!参考软件的「古制+岁差校正」走的是**郑氏恒星基值(15.9)+岁差**,即 = 它的「恒星制」= Horosa 的 `恒星制郑式(mode4)`(已逐颗对齐到角分);而「开禧」(16.0)是它另一个独立的「显示开禧宿度」叠加项 = Horosa 的 `回归开禧(mode3)`。所以对照参考的「古制+校正」要看 Horosa「恒星制郑式」,别看「回归开禧」。
+
+**修复前的 bug**:回归今制(2)曾**直接用冻结的 15.9(实为郑氏恒星基值)、零岁差**,导致今制宿度整体偏 ~18°(日落在「轸」应为「翼」)。`Herakleios/main`(荀爽分支)与 main 此处**逐字节相同**,即长期错配,非近期 regression。
+
+**会反复踩的坑**:
+1. **今制 ≠ 恒星制**。今制=活体距星(逐宿不均匀,随盘日期岁差);恒星制=郑氏冻结基值。差一个 ayanamsha(~13.86°@2006)。别再把 15.9 当今制。
+2. **置宿坐标**:自有恒星案三制(2/3/4)**沿黄道(planet.lon vs star.lon)**;荀爽/斗柄(0/1)**沿赤经(RA)**。`setPlanetSu28(byLon=)` + `fillPlanetSu28(byLon=)` 控制,别全局改成一种。
+3. **距星表 `MOIRA_DISTAR_J2000`** 是 28 距星 J2000 RA/Dec(自有星案),`_moira_distar_lon` 用 proper motion + 严格 IAU 岁差 (ζ,z,θ) 投到盘历元 tropical 黄经。高赤纬星(柳λDra Dec+69/张χUMa Dec+47/亢λCen Dec−63)必须严格岁差,线性近似会差。
+4. **mode4(恒星制)是 sidereal 盘**:planet.lon 已 sidereal,所以用 CUR **原值**(不加 ayanamsha);等价于 tropical planet + CUR+ayanamsha。别两头都加。
+5. **命度红线**:`GuoLaoMoiraWheel.renderDegreeTicks` 的 `life-degree-marker` 在宿度带(r4~r7)+ 年龄环(r10~r11)各画一条红线对齐 Moira。
+6. **回归测试**:`astropy/tests/test_guolao_su28_moira.py`(23 例,锁 DHX 盘恒星制 10 颗到 ±2′ + 今制落宿)。改宿度逻辑后必跑。
+7. **保密**:宿度数据是「自有恒星案/郑氏星案」,代码/文档/commit **不提任何外部软件名**(白名单仅 Moira)。
+
+---
+
 ## 日界点 + 晚子时·时柱起干（v2.2.1 起）
 
 **两个独立全局开关**，请务必先理解再改任何 day/time pillar 相关代码：
